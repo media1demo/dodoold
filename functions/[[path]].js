@@ -1,4 +1,4 @@
-// functions/[[path]].js -- THE COMPLETE AND CORRECTED FINAL VERSION
+// functions/[[path]].js  -- THE COMPLETE AND CORRECTED FINAL VERSION
 
 import { Webhook } from 'standardwebhooks';
 import DodoPayments from 'dodopayments';
@@ -6,7 +6,7 @@ import DodoPayments from 'dodopayments';
 // Your product ID from the Dodo Payments dashboard
 const EXISTING_PRODUCT_ID = 'pdt_Wi9yels9t5RHrfN4BjxNw';
 
-// This is the main function Cloudflare runs for every request.
+// This is the main function Cloudflare will run for every single request to your site.
 export async function onRequest(context) {
     const { request, env } = context;
     const url = new URL(request.url);
