@@ -1,25 +1,25 @@
-// functions/[[path]].js  -- THE COMPLETE AND CORRECTED FINAL VERSION
+// functions/[[path]].js -- FINAL CORRECTED VERSION
 
 import { Webhook } from 'standardwebhooks';
 import DodoPayments from 'dodopayments';
 
-// Your product ID from the Dodo Payments dashboard
 const EXISTING_PRODUCT_ID = 'pdt_Wi9yels9t5RHrfN4BjxNw';
 
-// This is the main function Cloudflare will run for every single request to your site.
 export async function onRequest(context) {
     const { request, env } = context;
     const url = new URL(request.url);
     const method = request.method;
-    
-    // **CRITICAL FIX**: Define the KV namespace from the environment context
     const kv = env.SUBSCRIPTIONS_KV;
 
-    // --- ROUTE 1: WEBHOOK HANDLER (Writes to KV) ---
+    if (!kv) {
+        return new Response("KV storage is not bound. Please check your Cloudflare settings.", { status: 500 });
+    }
+
+    // --- ROUTE 1: WEBHOOK HANDLER ---
     if (url.pathname === '/api/webhook' && method === 'POST') {
         try {
             const secret = env.DODO_PAYMENTS_WEBHOOK_KEY;
-            if (!secret) throw new Error("Webhook secret not configured in Cloudflare environment variables.");
+            if (!secret) throw new Error("Webhook secret not configured.");
 
             const wh = new Webhook(secret);
             const payload = wh.verify(await request.text(), request.headers);
@@ -45,7 +45,7 @@ export async function onRequest(context) {
                     console.log(`[KV] SUCCESS: Subscription status for ${email} saved.`);
                 } else if (payload.type === 'subscription.cancelled' && currentUserData.subscriptions) {
                     currentUserData.subscriptions.status = 'cancelled';
-                     console.log(`[KV] INFO: Subscription for ${email} marked as cancelled.`);
+                    console.log(`[KV] INFO: Subscription for ${email} marked as cancelled.`);
                 }
                 
                 await kv.put(email, JSON.stringify(currentUserData));
@@ -57,7 +57,7 @@ export async function onRequest(context) {
         }
     }
     
-    // --- ROUTE 2: HOME PAGE (Reads from KV) ---
+    // --- ROUTE 2: HOME PAGE ---
     if (url.pathname === '/' && method === 'GET') {
         const email = url.searchParams.get('email');
         if (email) {
@@ -100,9 +100,9 @@ export async function onRequest(context) {
         return Response.redirect(checkoutUrl, 302);
     }
     
-    // --- ROUTE 4: SUCCESS PAGE (Redirects to Home) ---
+    // --- ROUTE 4: SUCCESS PAGE ---
     if (url.pathname === '/success' && method === 'GET') {
-        // **CRITICAL FIX**: Use .get() to read from URLSearchParams
+        // **THIS IS THE FIX**: Use .get() to read from URLSearchParams
         const status = url.searchParams.get('status');
         const customerEmail = url.searchParams.get('email') || '';
 
@@ -111,8 +111,6 @@ export async function onRequest(context) {
             return new Response(generateHtmlPage("Payment Failed", failureHtml), { status: 400, headers: { 'Content-Type': 'text/html' } });
         }
         
-        // Immediately redirect to the home page with the email.
-        // This provides the seamless experience you wanted.
         const homeUrl = new URL(url.origin);
         if (customerEmail) {
             homeUrl.searchParams.set('email', customerEmail);
@@ -120,11 +118,9 @@ export async function onRequest(context) {
         return Response.redirect(homeUrl.toString(), 302);
     }
 
-    // If no other route matches, return a 404
     return new Response('Page Not Found.', { status: 404 });
 }
 
-// Helper function to generate full HTML pages
 function generateHtmlPage(title, bodyContent) {
     return `<!DOCTYPE html><html><head><title>${title}</title><style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background-color:#f4f6f8;text-align:center}.container{max-width:600px;margin:auto;background:#fff;padding:40px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.1)}.button{background-color:#007bff;color:#fff;padding:15px 25px;text-decoration:none;border-radius:8px;}input{padding:10px;width:250px;margin-bottom:20px;border-radius:5px;border:1px solid #ccc;}.product-card{border:1px solid #ddd;border-radius:8px;padding:20px;margin-top:20px;text-align:left}</style></head><body><div class="container">${bodyContent}</div></body></html>`;
 }
