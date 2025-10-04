@@ -139,23 +139,52 @@ export async function onRequest(context) {
     
     // --- ROUTE 4: SUCCESS PAGE (NO API CALLS) ---
     if (url.pathname === '/success' && method === 'GET') {
-       const status = url.searchParams.get('status');
-       const customerEmail = url.searchParams.get('email') || 'your email';
-
-       if (status !== 'succeeded' && status !== 'active') {
-           const failureHtml = `<h1>Payment Not Successful</h1><p>Your payment status was: <strong>${status || 'unknown'}</strong></p>`;
-           return new Response(generateHtmlPage("Payment Failed", failureHtml), { status: 400, headers: { 'Content-Type': 'text/html' } });
-       }
-
-       const successHtml = `
-            <h1>Thank You!</h1>
-            <h2>Your purchase is being processed.</h2>
-            <p>Your access will be granted in a moment. A confirmation has been sent to <strong>${customerEmail}</strong>.</p>
-            <br>
-            <a href="/?email=${encodeURIComponent(customerEmail)}" class="button">View My Access</a>
-        `;
-       return new Response(generateHtmlPage("Payment Successful", successHtml), { headers: { 'Content-Type': 'text/html' } });
+        const { payment_id, subscription_id, status } = url.searchParams;
+    
+        if (status.get('status') !== 'succeeded' && status.get('status') !== 'active') {
+            const failureHtml = `<h1>Payment Not Successful</h1><p>Your payment status was: <strong>${status.get('status') || 'unknown'}</strong></p>`;
+            return new Response(generateHtmlPage("Payment Failed", failureHtml), { status: 400, headers: { 'Content-Type': 'text/html' } });
+        }
+    
+        let customerEmail = 'your email'; // Default
+        let accessDetails = '<p>Your purchase is being processed.</p>';
+    
+        // We will try to fetch the customer email to provide a seamless redirect.
+        // This is for user experience only. The webhook is the source of truth for granting access.
+        try {
+            const dodoClient = new DodoPayments({
+                bearerToken: env.DODO_PAYMENTS_API_KEY,
+                environment: env.DODO_PAYMENTS_ENVIRONMENT || 'test_mode',
+            });
+    
+            // Small delay to help avoid the race condition
+            await new Promise(resolve => setTimeout(resolve, 1500)); // Wait 1.5 seconds
+    
+            if (subscription_id.get('subscription_id')) {
+                const subscription = await dodoClient.subscriptions.retrieve(subscription_id.get('subscription_id'));
+                customerEmail = subscription.customer?.email || customerEmail;
+                accessDetails = `<p>Your subscription is now active!</p>`;
+                console.log(`[Success Page] Verified subscription for: ${customerEmail}`);
+            } else if (payment_id.get('payment_id')) {
+                const payment = await dodoClient.payments.retrieve(payment_id.get('payment_id'));
+                customerEmail = payment.customer?.email || customerEmail;
+                accessDetails = `<p>Your purchase was successful!</p>`;
+                console.log(`[Success Page] Verified one-time payment for: ${customerEmail}`);
+            }
+        } catch (error) {
+            console.error(`[Success Page] Non-critical error fetching details (race condition likely): ${error.message}`);
+            // If it fails, we still show a success message and rely on the webhook.
+        }
+    
+        // Now, we redirect the user to the home page with their email automatically included.
+        // This prevents them from having to type it again.
+        const homeUrl = new URL(url.origin);
+        homeUrl.searchParams.set('email', customerEmail);
+        
+        // Instead of showing a page, we immediately redirect.
+        return Response.redirect(homeUrl.toString(), 302);
     }
+    
 
     // If no route matches, return a 404
     return new Response('Page Not Found.', { status: 404 });
