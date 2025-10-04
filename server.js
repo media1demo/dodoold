@@ -65,14 +65,14 @@ app.get('/checkout/:productId', async (req, res) => {
 // Keep the original API routes for programmatic access
 app.get('/api/checkout', checkoutHandler({
     bearerToken: process.env.DODO_PAYMENTS_API_KEY,
-    returnUrl: process.env.DODO_PAYMENTS_RETURN_URL || 'https://c6734df62e2c.ngrok-free.app/success',
+    returnUrl: process.env.DODO_PAYMENTS_RETURN_URL ,
     environment: process.env.DODO_PAYMENTS_ENVIRONMENT || 'test_mode',
     type: "static"
 }));
 
 app.post('/api/checkout', checkoutHandler({
     bearerToken: process.env.DODO_PAYMENTS_API_KEY,
-    returnUrl: process.env.DODO_PAYMENTS_RETURN_URL || 'https://c6734df62e2c.ngrok-free.app/success',
+    returnUrl: process.env.DODO_PAYMENTS_RETURN_URL,
     environment: process.env.DODO_PAYMENTS_ENVIRONMENT || 'test_mode',
     type: "dynamic"
 }));
