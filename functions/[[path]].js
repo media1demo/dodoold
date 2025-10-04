@@ -1,4 +1,4 @@
-// functions/[[path]].js -- FINAL CORRECTED VERSION
+// functions/[[path]].js - CORRECTED VERSION
 
 import { Webhook } from 'standardwebhooks';
 import DodoPayments from 'dodopayments';
@@ -12,6 +12,7 @@ export async function onRequest(context) {
     const kv = env.SUBSCRIPTIONS_KV;
 
     if (!kv) {
+        console.error('[ERROR] KV storage is not bound!');
         return new Response("KV storage is not bound. Please check your Cloudflare settings.", { status: 500 });
     }
 
@@ -19,41 +20,77 @@ export async function onRequest(context) {
     if (url.pathname === '/api/webhook' && method === 'POST') {
         try {
             const secret = env.DODO_PAYMENTS_WEBHOOK_KEY;
-            if (!secret) throw new Error("Webhook secret not configured.");
-
-            const wh = new Webhook(secret);
-            const payload = wh.verify(await request.text(), request.headers);
-            
-            console.log(`[Webhook] Verified! Event: ${payload.type}`);
-            const email = payload.data.customer?.email;
-
-            if (email) {
-                const currentUserData = await kv.get(email, { type: "json" }) || { subscriptions: null, products: [] };
-
-                if (payload.type === 'payment.succeeded' && payload.data.product_cart?.length > 0) {
-                    currentUserData.products.push({
-                        product_id: payload.data.product_cart[0].product_id,
-                        purchased_at: new Date(payload.timestamp)
-                    });
-                    console.log(`[KV] SUCCESS: One-time product for ${email} saved.`);
-                } else if (payload.type === 'subscription.active' || payload.type === 'subscription.renewed') {
-                    currentUserData.subscriptions = {
-                        status: 'active',
-                        next_billing_date: payload.data.next_billing_date,
-                        product_id: payload.data.product_id
-                    };
-                    console.log(`[KV] SUCCESS: Subscription status for ${email} saved.`);
-                } else if (payload.type === 'subscription.cancelled' && currentUserData.subscriptions) {
-                    currentUserData.subscriptions.status = 'cancelled';
-                    console.log(`[KV] INFO: Subscription for ${email} marked as cancelled.`);
-                }
-                
-                await kv.put(email, JSON.stringify(currentUserData));
+            if (!secret) {
+                console.error('[ERROR] Webhook secret not configured');
+                throw new Error("Webhook secret not configured.");
             }
-            return new Response(JSON.stringify({ status: 'success' }), { status: 200 });
+
+            const bodyText = await request.text();
+            console.log('[Webhook] Received webhook payload');
+            
+            const wh = new Webhook(secret);
+            const payload = wh.verify(bodyText, request.headers);
+            
+            console.log(`[Webhook] ✅ Verified! Event: ${payload.type}`);
+            console.log(`[Webhook] Full payload:`, JSON.stringify(payload, null, 2));
+            
+            const email = payload.data.customer?.email;
+            
+            if (!email) {
+                console.warn('[Webhook] ⚠️ No email found in webhook payload!');
+                return new Response(JSON.stringify({ status: 'success', warning: 'no email' }), { status: 200 });
+            }
+
+            console.log(`[Webhook] Processing for email: ${email}`);
+
+            // Fetch existing user data
+            const currentUserData = await kv.get(email, { type: "json" }) || { subscriptions: null, products: [] };
+            console.log(`[KV] Current data for ${email}:`, JSON.stringify(currentUserData));
+
+            // Handle different webhook events
+            if (payload.type === 'payment.succeeded' && payload.data.product_cart?.length > 0) {
+                currentUserData.products = currentUserData.products || [];
+                currentUserData.products.push({
+                    product_id: payload.data.product_cart[0].product_id,
+                    purchased_at: new Date(payload.timestamp).toISOString()
+                });
+                console.log(`[KV] ✅ Added one-time product for ${email}`);
+            } 
+            else if (payload.type === 'subscription.active' || payload.type === 'subscription.renewed') {
+                currentUserData.subscriptions = {
+                    status: 'active',
+                    next_billing_date: payload.data.next_billing_date,
+                    product_id: payload.data.product_id
+                };
+                console.log(`[KV] ✅ Updated subscription status for ${email}`);
+            } 
+            else if (payload.type === 'subscription.cancelled' && currentUserData.subscriptions) {
+                currentUserData.subscriptions.status = 'cancelled';
+                console.log(`[KV] ℹ️ Marked subscription as cancelled for ${email}`);
+            }
+            else {
+                console.log(`[Webhook] Event type ${payload.type} - no action taken`);
+            }
+            
+            // Save to KV
+            await kv.put(email, JSON.stringify(currentUserData));
+            console.log(`[KV] ✅ Data saved for ${email}:`, JSON.stringify(currentUserData));
+            
+            // Verify the save
+            const savedData = await kv.get(email, { type: "json" });
+            console.log(`[KV] Verification - data retrieved:`, JSON.stringify(savedData));
+            
+            return new Response(JSON.stringify({ status: 'success', email: email }), { 
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+            });
         } catch (err) {
-            console.error('❌ Webhook failed:', err.message);
-            return new Response(`Webhook Error: ${err.message}`, { status: 400 });
+            console.error('❌ Webhook failed:', err);
+            console.error('Error stack:', err.stack);
+            return new Response(JSON.stringify({ error: err.message }), { 
+                status: 400,
+                headers: { 'Content-Type': 'application/json' }
+            });
         }
     }
     
@@ -61,7 +98,10 @@ export async function onRequest(context) {
     if (url.pathname === '/' && method === 'GET') {
         const email = url.searchParams.get('email');
         if (email) {
+            console.log(`[Home] Checking access for: ${email}`);
             const userData = await kv.get(email, { type: "json" });
+            console.log(`[Home] User data:`, JSON.stringify(userData));
+            
             const hasActiveSubscription = userData?.subscriptions?.status === 'active';
             const hasProducts = userData?.products?.length > 0;
     
@@ -82,7 +122,7 @@ export async function onRequest(context) {
                 return new Response(generateHtmlPage("Buy Product", buyHtml), { headers: { 'Content-Type': 'text/html' } });
             }
         } else {
-            const emailFormHtml = `<h1>Check Your Access</h1><p>Enter your email.</p><form action="/" method="GET"><input type="email" name="email" required /><br/><button type="submit">Check Access</button></form>`;
+            const emailFormHtml = `<h1>Check Your Access</h1><p>Enter your email.</p><form action="/" method="GET"><input type="email" name="email" required placeholder="your@email.com" /><br/><button type="submit">Check Access</button></form>`;
             return new Response(generateHtmlPage("Check Access", emailFormHtml), { headers: { 'Content-Type': 'text/html' } });
         }
     }
@@ -97,17 +137,20 @@ export async function onRequest(context) {
         const returnUrl = encodeURIComponent(successUrl.toString());
         let checkoutUrl = `${baseUrl}/${productId}?quantity=1&redirect_url=${returnUrl}`;
         if (email) checkoutUrl += `&email=${encodeURIComponent(email)}`;
+        
+        console.log(`[Checkout] Redirecting to: ${checkoutUrl}`);
         return Response.redirect(checkoutUrl, 302);
     }
     
     // --- ROUTE 4: SUCCESS PAGE ---
     if (url.pathname === '/success' && method === 'GET') {
-        // **THIS IS THE FIX**: Use .get() to read from URLSearchParams
         const status = url.searchParams.get('status');
         const customerEmail = url.searchParams.get('email') || '';
 
+        console.log(`[Success] Status: ${status}, Email: ${customerEmail}`);
+
         if (status !== 'succeeded' && status !== 'active') {
-            const failureHtml = `<h1>Payment Not Successful</h1><p>Your payment status was: <strong>${status || 'unknown'}</strong></p>`;
+            const failureHtml = `<h1>Payment Not Successful</h1><p>Your payment status was: <strong>${status || 'unknown'}</strong></p><a href="/" class="button">Go Home</a>`;
             return new Response(generateHtmlPage("Payment Failed", failureHtml), { status: 400, headers: { 'Content-Type': 'text/html' } });
         }
         
@@ -122,5 +165,5 @@ export async function onRequest(context) {
 }
 
 function generateHtmlPage(title, bodyContent) {
-    return `<!DOCTYPE html><html><head><title>${title}</title><style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background-color:#f4f6f8;text-align:center}.container{max-width:600px;margin:auto;background:#fff;padding:40px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.1)}.button{background-color:#007bff;color:#fff;padding:15px 25px;text-decoration:none;border-radius:8px;}input{padding:10px;width:250px;margin-bottom:20px;border-radius:5px;border:1px solid #ccc;}.product-card{border:1px solid #ddd;border-radius:8px;padding:20px;margin-top:20px;text-align:left}</style></head><body><div class="container">${bodyContent}</div></body></html>`;
+    return `<!DOCTYPE html><html><head><title>${title}</title><style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background-color:#f4f6f8;text-align:center}.container{max-width:600px;margin:auto;background:#fff;padding:40px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.1)}.button{background-color:#007bff;color:#fff;padding:15px 25px;text-decoration:none;border-radius:8px;display:inline-block;margin-top:20px;}button{background-color:#007bff;color:#fff;padding:15px 25px;border:none;border-radius:8px;cursor:pointer;font-size:16px;}input{padding:10px;width:250px;margin-bottom:20px;border-radius:5px;border:1px solid #ccc;font-size:16px;}.product-card{border:1px solid #ddd;border-radius:8px;padding:20px;margin-top:20px;text-align:left;background:#f9f9f9;}</style></head><body><div class="container">${bodyContent}</div></body></html>`;
 }
